@@ -12,6 +12,10 @@ use BeyondCode\LaravelWebSockets\ServerFactory;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use React\EventLoop\Factory as LoopFactory;
+use React\EventLoop\LoopInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+
+use function React\Promise\all;
 
 class StartServer extends Command
 {
@@ -69,6 +73,10 @@ class StartServer extends Command
      */
     public function handle()
     {
+        $this->laravel->singleton(LoopInterface::class, function () {
+            return $this->loop;
+        });
+
         $this->configureLoggers();
 
         $this->configureManagers();
@@ -128,7 +136,7 @@ class StartServer extends Command
             $intervalInSeconds = $this->option('statistics-interval') ?: config('websockets.statistics.interval_in_seconds', 3600);
 
             $this->loop->addPeriodicTimer($intervalInSeconds, function () {
-                $this->line('Saving statistics...');
+                $this->line('Saving statistics...', null, OutputInterface::VERBOSITY_VERBOSE);
 
                 StatisticsCollectorFacade::save();
             });
@@ -254,7 +262,9 @@ class StartServer extends Command
      */
     protected function startServer()
     {
-        $this->info("Starting the WebSocket server on port {$this->option('port')}...");
+        $this->components->info("Starting the WebSocket server on port {$this->option('port')}...");
+        $this->comment('  <fg=yellow;options=bold>Press Ctrl+C to stop the server</>');
+        $this->newLine();
 
         $this->buildServer();
 
@@ -311,9 +321,13 @@ class StartServer extends Command
         // be automatically be unsubscribed from all channels.
         $channelManager->getLocalConnections()
             ->then(function ($connections) {
-                foreach ($connections as $connection) {
-                    $connection->close();
-                }
+                return all(collect($connections)->map(function ($connection) {
+                    return app('websockets.handler')
+                        ->onClose($connection)
+                        ->then(function () use ($connection) {
+                            $connection->close();
+                        });
+                })->toArray());
             })
             ->then(function () {
                 $this->loop->stop();

@@ -6,9 +6,11 @@ use BeyondCode\LaravelWebSockets\Contracts\ChannelManager;
 use BeyondCode\LaravelWebSockets\DashboardLogger;
 use BeyondCode\LaravelWebSockets\Events\SubscribedToChannel;
 use BeyondCode\LaravelWebSockets\Events\UnsubscribedFromChannel;
+use BeyondCode\LaravelWebSockets\Helpers;
 use BeyondCode\LaravelWebSockets\Server\Exceptions\InvalidSignature;
 use Illuminate\Support\Str;
 use Ratchet\ConnectionInterface;
+use React\Promise\PromiseInterface;
 use stdClass;
 
 class Channel
@@ -60,6 +62,17 @@ class Channel
     }
 
     /**
+     * Get connection by socketId.
+     *
+     * @param  string socketId
+     * @return ?ConnectionInterface
+     */
+    public function getConnection(string $socketId): ?ConnectionInterface
+    {
+        return $this->connections[$socketId] ?? null;
+    }
+
+    /**
      * Check if the channel has connections.
      *
      * @return bool
@@ -105,12 +118,12 @@ class Channel
      * Unsubscribe connection from the channel.
      *
      * @param  \Ratchet\ConnectionInterface  $connection
-     * @return bool
+     * @return PromiseInterface
      */
-    public function unsubscribe(ConnectionInterface $connection): bool
+    public function unsubscribe(ConnectionInterface $connection): PromiseInterface
     {
         if (! $this->hasConnection($connection)) {
-            return false;
+            return Helpers::createFulfilledPromise(false);
         }
 
         unset($this->connections[$connection->socketId]);
@@ -121,7 +134,7 @@ class Channel
             $this->getName()
         );
 
-        return true;
+        return Helpers::createFulfilledPromise(true);
     }
 
     /**
@@ -159,6 +172,7 @@ class Channel
         collect($this->getConnections())
             ->each(function ($connection) use ($payload) {
                 $connection->send(json_encode($payload));
+                $this->channelManager->connectionPonged($connection);
             });
 
         if ($replicate) {
@@ -196,12 +210,13 @@ class Channel
         }
 
         if (is_null($socketId)) {
-            return $this->broadcast($appId, $payload, $replicate);
+            return $this->broadcast($appId, $payload, false);
         }
 
         collect($this->getConnections())->each(function (ConnectionInterface $connection) use ($socketId, $payload) {
             if ($connection->socketId !== $socketId) {
                 $connection->send(json_encode($payload));
+                $this->channelManager->connectionPonged($connection);
             }
         });
 
